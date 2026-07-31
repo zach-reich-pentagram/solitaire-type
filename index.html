@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Solitaire Type</title>
+<meta name="description" content="A typographic riff on the Windows Solitaire winning animation. Type letters and watch them riffle down the screen." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23008000'/%3E%3Ctext x='16' y='24' font-family='Arial Black,Arial' font-size='22' font-weight='900' fill='%23fff' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+
+  <main id="stage">
+    <div id="frame">
+      <canvas id="canvas"></canvas>
+      <div id="hint">start typing</div>
+    </div>
+  </main>
+
+  <button id="panelToggle" type="button" aria-expanded="true" aria-controls="panel" title="Toggle controls">
+    <span class="bars" aria-hidden="true"></span>
+  </button>
+
+  <aside id="panel" aria-label="Controls">
+    <header class="panel-head">
+      <h1>Solitaire Type</h1>
+      <p>Type anywhere on the page.</p>
+    </header>
+
+    <section class="group">
+      <h2>Canvas</h2>
+
+      <div class="row">
+        <label for="ratio">Aspect ratio</label>
+        <div class="inline">
+          <input id="ratio" type="text" value="4:3" spellcheck="false" autocomplete="off" />
+          <select id="ratioPreset" aria-label="Aspect ratio presets">
+            <option value="">presets</option>
+            <option value="4:3">4:3</option>
+            <option value="16:9">16:9</option>
+            <option value="1:1">1:1</option>
+            <option value="9:16">9:16</option>
+            <option value="3:2">3:2</option>
+            <option value="2:3">2:3</option>
+            <option value="fill">fill window</option>
+          </select>
+        </div>
+        <p class="help">Accepts <code>16:9</code>, <code>4/3</code>, <code>1.777</code>, or <code>fill</code>.</p>
+      </div>
+
+      <div class="row two">
+        <div>
+          <label for="bg">Background</label>
+          <div class="swatch"><input id="bg" type="color" value="#008000" /><input id="bgHex" type="text" value="#008000" spellcheck="false" /></div>
+        </div>
+        <div>
+          <label for="fg">Text</label>
+          <div class="swatch"><input id="fg" type="color" value="#ffffff" /><input id="fgHex" type="text" value="#ffffff" spellcheck="false" /></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Type</h2>
+
+      <div class="row">
+        <label for="fontSelect">Typeface</label>
+        <select id="fontSelect"></select>
+      </div>
+
+      <div class="row">
+        <label class="file-label" for="fontFile">
+          <span>Upload custom typeface</span>
+          <input id="fontFile" type="file" accept=".ttf,.otf,.woff,.woff2,font/*" multiple />
+        </label>
+        <p class="help">TTF, OTF, WOFF, WOFF2. Stays in your browser.</p>
+      </div>
+
+      <div class="row">
+        <label for="weight">Weight</label>
+        <select id="weight">
+          <option value="400">Regular</option>
+          <option value="500">Medium</option>
+          <option value="700">Bold</option>
+          <option value="800">Extra bold</option>
+          <option value="900" selected>Black</option>
+        </select>
+      </div>
+
+      <div class="slider" data-unit="px">
+        <label for="size">Letter size <output for="size">140</output></label>
+        <input id="size" type="range" min="16" max="420" step="1" value="140" />
+      </div>
+
+      <div class="row">
+        <label class="check"><input id="uppercase" type="checkbox" checked /> Force uppercase</label>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Physics</h2>
+
+      <div class="slider">
+        <label for="speed">Speed <output for="speed">7.0</output></label>
+        <input id="speed" type="range" min="0.5" max="20" step="0.1" value="7" />
+      </div>
+
+      <div class="slider">
+        <label for="gravity">Gravity <output for="gravity">0.60</output></label>
+        <input id="gravity" type="range" min="0" max="3" step="0.01" value="0.6" />
+      </div>
+
+      <div class="slider">
+        <label for="bounce">Bounce <output for="bounce">0.72</output></label>
+        <input id="bounce" type="range" min="0" max="1" step="0.01" value="0.72" />
+      </div>
+
+      <div class="slider">
+        <label for="density">Riffle density <output for="density">5</output></label>
+        <input id="density" type="range" min="1" max="24" step="1" value="5" />
+      </div>
+
+      <div class="slider">
+        <label for="outline">Edge outline <output for="outline">5</output></label>
+        <input id="outline" type="range" min="0" max="16" step="1" value="5" />
+      </div>
+
+      <div class="slider">
+        <label for="spread">Launch spread <output for="spread">0.45</output></label>
+        <input id="spread" type="range" min="0" max="1" step="0.01" value="0.45" />
+      </div>
+
+      <div class="slider">
+        <label for="drop">Initial drop <output for="drop">0.30</output></label>
+        <input id="drop" type="range" min="0" max="3" step="0.01" value="0.3" />
+      </div>
+
+      <div class="row">
+        <label class="check"><input id="bothWays" type="checkbox" /> Random launch direction</label>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Actions</h2>
+      <div class="buttons">
+        <button id="clear" type="button" class="primary">Clear canvas</button>
+        <button id="demo" type="button">Auto‑type demo</button>
+        <button id="save" type="button">Save PNG</button>
+        <button id="reset" type="button">Reset settings</button>
+      </div>
+      <p class="help">Shortcuts: <kbd>Esc</kbd> clear · <kbd>Tab</kbd> hide panel · <kbd>Enter</kbd> new row</p>
+    </section>
+  </aside>
+
+  <script src="./app.js"></script>
+</body>
+</html>
