@@ -12,23 +12,38 @@
   const vctx = view.getContext('2d');
   const hint = $('hint');
 
-  /* Ink layer: a transparent bitmap holding every stamp ever laid down.
-     The visible canvas is just background fill + this layer, so changing
-     the background never destroys the drawing. */
-  const ink = document.createElement('canvas');
-  const ictx = ink.getContext('2d');
+  /* Two transparent bitmaps hold every stamp ever laid down: one for glyph
+     fills, one for the outlines around them. The visible canvas is just a
+     background fill plus these two, so changing the background never
+     destroys the drawing, and either layer can be recoloured on its own.
+
+     The layers are kept strictly disjoint — each pixel belongs to whichever
+     of the two the topmost stamp painted there — so they can be composited
+     in either order without disturbing the stacking of the trail. */
+  const fill = document.createElement('canvas');
+  const fctx = fill.getContext('2d');
+  const edge = document.createElement('canvas');
+  const ectx = edge.getContext('2d');
+  const LAYERS = [
+    { c: edge, x: ectx },
+    { c: fill, x: fctx }
+  ];
 
   const DPR = Math.min(window.devicePixelRatio || 1, 2);
 
   const DEFAULTS = {
+    v: 3,                     // bump when a setting changes meaning
     ratio: '4:3',
     bg: '#008000',
     fg: '#ffffff',
+    outlineColor: '#000000',
+    outlineMatchesBg: true,
     font: 'Arial Black',
     weight: '900',
     size: 140,
     uppercase: true,
-    speed: 7,
+    speed: 1,
+    reach: 0.5,
     gravity: 0.6,
     bounce: 0.72,
     density: 5,
@@ -39,6 +54,9 @@
   };
 
   const S = Object.assign({}, DEFAULTS, loadSettings());
+
+  // The colour actually painted into the outline layer.
+  function edgeColour() { return S.outlineMatchesBg ? S.bg : S.outlineColor; }
 
   const BUILTIN_FONTS = [
     'Arial Black',
@@ -95,12 +113,13 @@
     if (w === W && h === H) return;
 
     // keep whatever is already drawn, rescaled into the new box
-    const prev = document.createElement('canvas');
-    let hadInk = false;
-    if (ink.width && ink.height) {
-      prev.width = ink.width; prev.height = ink.height;
-      prev.getContext('2d').drawImage(ink, 0, 0);
-      hadInk = true;
+    const kept = [];
+    for (const L of LAYERS) {
+      if (!L.c.width || !L.c.height) break;
+      const prev = document.createElement('canvas');
+      prev.width = L.c.width; prev.height = L.c.height;
+      prev.getContext('2d').drawImage(L.c, 0, 0);
+      kept.push(prev);
     }
 
     // Rescale existing art uniformly and centre it, so changing the aspect
@@ -113,7 +132,7 @@
     frame.style.width = w + 'px';
     frame.style.height = h + 'px';
 
-    for (const c of [view, ink]) {
+    for (const c of [view, fill, edge]) {
       c.width = Math.round(w * DPR);
       c.height = Math.round(h * DPR);
     }
@@ -121,16 +140,15 @@
     view.style.height = h + 'px';
 
     vctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ictx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ictx.textBaseline = 'top';
-
-    if (hadInk) {
-      ictx.save();
-      ictx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      ictx.drawImage(prev, offX, offY, (prev.width / DPR) * k, (prev.height / DPR) * k);
-      ictx.restore();
-      ictx.textBaseline = 'top';
+    for (const L of LAYERS) {
+      L.x.setTransform(DPR, 0, 0, DPR, 0, 0);
+      L.x.textBaseline = 'top';
+      L.x.lineJoin = 'round';
     }
+
+    kept.forEach((prev, i) => {
+      LAYERS[i].x.drawImage(prev, offX, offY, (prev.width / DPR) * k, (prev.height / DPR) * k);
+    });
 
     // keep live particles in step with the reframed canvas
     for (const p of particles) {
@@ -152,8 +170,8 @@
   }
 
   function measure(ch, size) {
-    ictx.font = fontString(size);
-    return ictx.measureText(ch).width;
+    fctx.font = fontString(size);
+    return fctx.measureText(ch).width;
   }
 
   // Cap-height-ish fraction of the em box, used for floor collision so the
@@ -192,7 +210,20 @@
     const dir = S.bothWays
       ? (Math.random() < 0.5 ? -1 : 1)
       : (x > W * 0.62 ? -1 : 1);
-    const jitter = 1 + (Math.random() * 2 - 1) * S.spread;
+    const jitter = Math.max(0.05, 1 + (Math.random() * 2 - 1) * S.spread);
+
+    const g = S.gravity * scale;
+    const vy = S.drop * 10 * scale * (0.6 + Math.random() * 0.8);
+
+    /* Horizontal reach is expressed as a fraction of the canvas width covered
+       during the first fall, so solve for that fall's duration and derive the
+       horizontal velocity from it. Speed scales time uniformly, so it stretches
+       the trajectory in neither axis — the reach holds at any speed. */
+    const drop = Math.max(1, H - size * GLYPH_H - pad);
+    let frames = g > 0
+      ? (Math.sqrt(vy * vy + 2 * g * drop) - vy) / g
+      : (vy > 0 ? drop / vy : 240);
+    frames = Math.min(1200, Math.max(4, frames));
 
     particles.push({
       ch,
@@ -200,8 +231,8 @@
       w,
       x,
       y: pad,
-      vx: S.speed * scale * dir * Math.max(0.15, jitter),
-      vy: S.speed * scale * S.drop * (0.6 + Math.random() * 0.8),
+      vx: (S.reach * W / frames) * dir * jitter,
+      vy,
       travel: 0,
       stamps: 1
     });
@@ -219,14 +250,15 @@
     if (cursorX > W - topPad()) rowFull = true;
   }
 
-  const SUBSTEPS = 8; // physics resolution, independent of how often we stamp
-
   function step(dt) {
     if (!particles.length) return false;
 
     const scale = H / 720;
     const g = S.gravity * scale;
-    const inv = dt / SUBSTEPS;
+    // physics resolution, independent of how often we stamp; scaled with dt so
+    // high speeds cannot tunnel a letter straight through the floor
+    const substeps = Math.min(48, Math.max(8, Math.ceil(dt * 8)));
+    const inv = dt / substeps;
 
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
@@ -235,7 +267,7 @@
       // rather than on how fast the letter happens to be travelling.
       const gap = Math.max(1.5, p.size * 1.5 / S.density);
 
-      for (let s = 0; s < SUBSTEPS; s++) {
+      for (let s = 0; s < substeps; s++) {
         p.vy += g * inv;
         const dx = p.vx * inv;
         const dy = p.vy * inv;
@@ -261,7 +293,8 @@
         p.stamps > MAX_STAMPS ||
         p.x > W + p.w * 0.6 ||
         p.x < -p.w * 1.6 ||
-        p.y > H + p.size * 2
+        p.y > H + p.size * 2 ||
+        (p.vy === 0 && Math.abs(p.vx) < 0.05)   // came to rest on the floor
       ) {
         particles.splice(i, 1);
       }
@@ -270,27 +303,39 @@
     return true;
   }
 
-  /* Each stamp first erases a halo along its own outline, then fills. On a
-     transparent ink layer that reads as a background-coloured edge, which is
-     what keeps overlapping stamps legible instead of merging into one blob —
-     the same trick the original animation gets for free from card borders.
-     Erasing (rather than stroking in the background colour) keeps the ink
-     layer a pure alpha mask, so the text colour stays changeable. */
+  /* A stamp paints an outline ring and then a glyph fill. Rather than layering
+     those on one bitmap, each is routed to its own layer, and every stamp
+     removes the region it covers from the other layer. That keeps the two
+     layers disjoint and correctly stacked — a later stamp's outline still cuts
+     across an earlier stamp's fill, which is what keeps overlapping letters
+     legible instead of merging into one blob. Because each layer ends up
+     holding a single colour, both stay recolourable after the fact. */
   function stamp(p) {
-    ictx.font = fontString(p.size);
-
+    const font = fontString(p.size);
     const lw = S.outline * (p.size / 160);
-    if (lw > 0.15) {
-      ictx.globalCompositeOperation = 'destination-out';
-      ictx.lineWidth = lw * 2;
-      ictx.lineJoin = 'round';
-      ictx.strokeStyle = '#000';
-      ictx.strokeText(p.ch, p.x, p.y);
-      ictx.globalCompositeOperation = 'source-over';
-    }
+    const outlined = lw > 0.15;
 
-    ictx.fillStyle = S.fg;
-    ictx.fillText(p.ch, p.x, p.y);
+    // fill layer: punch out the ring this stamp's outline occupies, then fill
+    fctx.font = font;
+    if (outlined) {
+      fctx.globalCompositeOperation = 'destination-out';
+      fctx.lineWidth = lw * 2;
+      fctx.strokeText(p.ch, p.x, p.y);
+      fctx.globalCompositeOperation = 'source-over';
+    }
+    fctx.fillStyle = S.fg;
+    fctx.fillText(p.ch, p.x, p.y);
+
+    // outline layer: add the ring, then clear whatever the fill now covers
+    ectx.font = font;
+    if (outlined) {
+      ectx.strokeStyle = edgeColour();
+      ectx.lineWidth = lw * 2;
+      ectx.strokeText(p.ch, p.x, p.y);
+    }
+    ectx.globalCompositeOperation = 'destination-out';
+    ectx.fillText(p.ch, p.x, p.y);
+    ectx.globalCompositeOperation = 'source-over';
   }
 
   /* ---------------- render loop ---------------- */
@@ -298,7 +343,8 @@
   function render() {
     vctx.fillStyle = S.bg;
     vctx.fillRect(0, 0, W, H);
-    vctx.drawImage(ink, 0, 0, W, H);
+    vctx.drawImage(edge, 0, 0, W, H);
+    vctx.drawImage(fill, 0, 0, W, H);
   }
 
   let last = performance.now();
@@ -306,29 +352,35 @@
   function tick(now) {
     const dt = Math.min(3, Math.max(0.15, (now - last) / 16.667));
     last = now;
-    if (step(dt)) render();
+    if (step(dt * S.speed)) render();
     requestAnimationFrame(tick);
   }
 
   /* ---------------- ink recolour / clear ---------------- */
 
-  // Repaint every existing stamp in the new text colour, preserving its alpha.
-  function recolourInk(color) {
-    ictx.save();
-    ictx.setTransform(1, 0, 0, 1, 0, 0);
-    ictx.globalCompositeOperation = 'source-in';
-    ictx.fillStyle = color;
-    ictx.fillRect(0, 0, ink.width, ink.height);
-    ictx.restore();
+  // Repaint a whole layer in a new colour, preserving every stamp's alpha.
+  function recolour(layer, colour) {
+    const { c, x } = layer;
+    x.save();
+    x.setTransform(1, 0, 0, 1, 0, 0);
+    x.globalCompositeOperation = 'source-in';
+    x.fillStyle = colour;
+    x.fillRect(0, 0, c.width, c.height);
+    x.restore();
     render();
   }
 
+  function recolourFill() { recolour(LAYERS[1], S.fg); }
+  function recolourEdge() { recolour(LAYERS[0], edgeColour()); }
+
   function clearCanvas() {
     particles.length = 0;
-    ictx.save();
-    ictx.setTransform(1, 0, 0, 1, 0, 0);
-    ictx.clearRect(0, 0, ink.width, ink.height);
-    ictx.restore();
+    for (const L of LAYERS) {
+      L.x.save();
+      L.x.setTransform(1, 0, 0, 1, 0, 0);
+      L.x.clearRect(0, 0, L.c.width, L.c.height);
+      L.x.restore();
+    }
     cursorX = 0;
     rowFull = false;
     hint.classList.remove('gone');
@@ -339,7 +391,10 @@
 
   function loadSettings() {
     try {
-      return JSON.parse(localStorage.getItem('solitaire-type') || '{}');
+      const saved = JSON.parse(localStorage.getItem('solitaire-type') || '{}');
+      // sliders have changed meaning across versions; stale values would read
+      // as wild settings rather than as the defaults the user expects
+      return saved && saved.v === 3 ? saved : {};
     } catch {
       return {};
     }
@@ -358,6 +413,7 @@
     ratioPreset: $('ratioPreset'),
     bg: $('bg'), bgHex: $('bgHex'),
     fg: $('fg'), fgHex: $('fgHex'),
+    ec: $('ec'), ecHex: $('ecHex'), ecMatch: $('ecMatch'),
     fontSelect: $('fontSelect'),
     fontFile: $('fontFile'),
     weight: $('weight'),
@@ -370,6 +426,7 @@
     spread: $('spread'),
     drop: $('drop'),
     outline: $('outline'),
+    reach: $('reach'),
     bothWays: $('bothWays')
   };
 
@@ -377,7 +434,7 @@
     const o = el.parentElement.querySelector('output');
     if (!o) return;
     const dp = parseFloat(el.step) < 1 ? 2 : 0;
-    o.textContent = parseFloat(el.value).toFixed(el.id === 'speed' ? 1 : dp);
+    o.textContent = parseFloat(el.value).toFixed(dp);
   }
 
   function buildFontList() {
@@ -413,10 +470,13 @@
     ui.ratio.value = S.ratio;
     ui.bg.value = S.bg; ui.bgHex.value = S.bg;
     ui.fg.value = S.fg; ui.fgHex.value = S.fg;
+    ui.ec.value = S.outlineColor; ui.ecHex.value = S.outlineColor;
+    ui.ecMatch.checked = S.outlineMatchesBg;
+    setEdgeInputsEnabled();
     ui.weight.value = S.weight;
     ui.uppercase.checked = S.uppercase;
     ui.bothWays.checked = S.bothWays;
-    for (const key of ['size', 'speed', 'gravity', 'bounce', 'density', 'spread', 'drop', 'outline']) {
+    for (const key of ['size', 'speed', 'reach', 'gravity', 'bounce', 'density', 'spread', 'drop', 'outline']) {
       ui[key].value = S[key];
       out(ui[key]);
     }
@@ -431,7 +491,7 @@
     });
   }
 
-  ['size', 'speed', 'gravity', 'bounce', 'density', 'spread', 'drop', 'outline'].forEach(bindRange);
+  ['size', 'speed', 'reach', 'gravity', 'bounce', 'density', 'spread', 'drop', 'outline'].forEach(bindRange);
 
   ui.ratio.addEventListener('change', () => {
     S.ratio = ui.ratio.value.trim() || 'fill';
@@ -449,26 +509,58 @@
     layout();
   });
 
-  ui.bg.addEventListener('input', () => {
-    S.bg = ui.bg.value;
-    ui.bgHex.value = S.bg;
+  function setBg(value) {
+    S.bg = value;
     saveSettings();
-    render();
+    if (S.outlineMatchesBg) recolourEdge();
+    else render();
+  }
+
+  ui.bg.addEventListener('input', () => {
+    ui.bgHex.value = ui.bg.value;
+    setBg(ui.bg.value);
   });
 
   ui.bgHex.addEventListener('change', () => {
     if (!isHex(ui.bgHex.value)) { ui.bgHex.value = S.bg; return; }
-    S.bg = ui.bgHex.value.trim().toLowerCase();
-    ui.bg.value = S.bg;
+    ui.bg.value = ui.bgHex.value = ui.bgHex.value.trim().toLowerCase();
+    setBg(ui.bg.value);
+  });
+
+  function setEdgeInputsEnabled() {
+    const off = S.outlineMatchesBg;
+    ui.ec.disabled = off;
+    ui.ecHex.disabled = off;
+    ui.ec.parentElement.classList.toggle('disabled', off);
+  }
+
+  ui.ec.addEventListener('input', () => {
+    S.outlineColor = ui.ec.value;
+    ui.ecHex.value = S.outlineColor;
     saveSettings();
-    render();
+    recolourEdge();
+  });
+
+  ui.ecHex.addEventListener('change', () => {
+    if (!isHex(ui.ecHex.value)) { ui.ecHex.value = S.outlineColor; return; }
+    S.outlineColor = ui.ecHex.value.trim().toLowerCase();
+    ui.ec.value = S.outlineColor;
+    saveSettings();
+    recolourEdge();
+  });
+
+  ui.ecMatch.addEventListener('change', () => {
+    S.outlineMatchesBg = ui.ecMatch.checked;
+    setEdgeInputsEnabled();
+    saveSettings();
+    recolourEdge();
   });
 
   ui.fg.addEventListener('input', () => {
     S.fg = ui.fg.value;
     ui.fgHex.value = S.fg;
     saveSettings();
-    recolourInk(S.fg);
+    recolourFill();
   });
 
   ui.fgHex.addEventListener('change', () => {
@@ -476,7 +568,7 @@
     S.fg = ui.fgHex.value.trim().toLowerCase();
     ui.fg.value = S.fg;
     saveSettings();
-    recolourInk(S.fg);
+    recolourFill();
   });
 
   ui.fontSelect.addEventListener('change', () => {
@@ -529,17 +621,19 @@
     saveSettings();
     syncUI();
     layout();
-    render();
+    recolourFill();
+    recolourEdge();
   });
 
   $('save').addEventListener('click', () => {
     const out = document.createElement('canvas');
-    out.width = ink.width;
-    out.height = ink.height;
+    out.width = fill.width;
+    out.height = fill.height;
     const c = out.getContext('2d');
     c.fillStyle = S.bg;
     c.fillRect(0, 0, out.width, out.height);
-    c.drawImage(ink, 0, 0);
+    c.drawImage(edge, 0, 0);
+    c.drawImage(fill, 0, 0);
     const a = document.createElement('a');
     a.download = 'solitaire-type.png';
     a.href = out.toDataURL('image/png');

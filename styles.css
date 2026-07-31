@@ -247,6 +247,10 @@ input[type="range"]::-moz-range-thumb {
 
 /* checkbox */
 
+label.check.indent { margin-top: 8px; }
+
+.swatch.disabled { opacity: .4; }
+
 label.check {
   display: flex;
   align-items: center;
