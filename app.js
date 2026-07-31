@@ -10,7 +10,6 @@
   const frame = $('frame');
   const view = $('canvas');
   const vctx = view.getContext('2d');
-  const hint = $('hint');
 
   /* Two transparent bitmaps hold every stamp ever laid down: one for glyph
      fills, one for the outlines around them. The visible canvas is just a
@@ -240,8 +239,6 @@
     stamp(particles[particles.length - 1]);   // the letter appears the instant it's typed
 
     if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
-
-    hint.classList.add('gone');
   }
 
   function advanceCursor(w) {
@@ -383,7 +380,6 @@
     }
     cursorX = 0;
     rowFull = false;
-    hint.classList.remove('gone');
     render();
   }
 

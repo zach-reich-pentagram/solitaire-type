@@ -51,22 +51,6 @@ canvas {
   touch-action: none;
 }
 
-#hint {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 14px;
-  letter-spacing: .28em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, .38);
-  pointer-events: none;
-  line-height: 1;
-  transition: opacity .4s ease;
-}
-
-#hint.gone { opacity: 0; }
-
 /* ---------- panel ---------- */
 
 #panel {
